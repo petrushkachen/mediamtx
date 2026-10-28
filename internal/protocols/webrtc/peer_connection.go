@@ -16,7 +16,7 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/sdp/v3"
-	"github.com/pion/transport/v4"
+	"github.com/pion/transport/v5"
 	"github.com/pion/webrtc/v4"
 
 	"github.com/bluenviron/mediamtx/internal/logger"
@@ -299,10 +299,8 @@ func (co *PeerConnection) Start() error {
 		// Otherwise audio is muted on Firefox and Chrome.
 		if !videoSetupped {
 			err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-				RTPCodecCapability: webrtc.RTPCodecCapability{
-					MimeType:  webrtc.MimeTypeVP8,
-					ClockRate: 90000,
-				},
+				MimeType:    webrtc.MimeTypeVP8,
+				ClockRate:   90000,
 				PayloadType: 96,
 			}, webrtc.RTPCodecTypeVideo)
 			if err != nil {
@@ -602,11 +600,18 @@ func (co *PeerConnection) addAdditionalCandidates(firstMedia *sdp.MediaDescripti
 
 func (co *PeerConnection) filterLocalDescription(desc *webrtc.SessionDescription) (*webrtc.SessionDescription, error) {
 	var psdp sdp.SessionDescription
-	psdp.Unmarshal([]byte(desc.SDP)) //nolint:errcheck
+	err := psdp.Unmarshal([]byte(desc.SDP))
+	if err != nil {
+		return nil, err
+	}
+
+	if len(psdp.MediaDescriptions) == 0 {
+		return nil, fmt.Errorf("local description has no media sections")
+	}
 
 	firstMedia := psdp.MediaDescriptions[0]
 
-	err := co.removeUnwantedCandidates(firstMedia)
+	err = co.removeUnwantedCandidates(firstMedia)
 	if err != nil {
 		return nil, err
 	}

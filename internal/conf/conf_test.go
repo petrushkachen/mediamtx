@@ -3,6 +3,7 @@ package conf
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"os"
 	"testing"
@@ -16,6 +17,8 @@ import (
 )
 
 func createTempFile(t *testing.T, byts []byte) string {
+	t.Helper()
+
 	tmpf, err := os.CreateTemp(t.TempDir(), "rtsp-")
 	require.NoError(t, err)
 	defer tmpf.Close()
@@ -50,7 +53,7 @@ func TestConfFromFile(t *testing.T) {
 			Forward:                    Forward{},
 			AlwaysAvailableTracks:      []AlwaysAvailableTrack{},
 			AlwaysAvailableRecorded:    true,
-			RecordPath:                 "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f",
+			RecordPath:                 "./recordings/%path/%Y-%m-%d_%H-%M-%S-%f_%z",
 			RecordFormat:               RecordFormatFMP4,
 			RecordPartDuration:         Duration(1 * time.Second),
 			RecordMaxPartSize:          50 * 1024 * 1024,
@@ -323,14 +326,6 @@ func TestConfDeprecatedAuth(t *testing.T) {
 	require.Equal(t, []AuthInternalUser{
 		{
 			User: "any",
-			Permissions: []AuthInternalUserPermission{
-				{
-					Action: AuthActionPlayback,
-				},
-			},
-		},
-		{
-			User: "any",
 			IPs:  IPNetworks{mustParseCIDR("127.0.0.1/32"), mustParseCIDR("::1/128")},
 			Permissions: []AuthInternalUserPermission{
 				{
@@ -363,9 +358,14 @@ func TestConfDeprecatedAuth(t *testing.T) {
 					Action: AuthActionRead,
 					Path:   "cam",
 				},
+				{
+					Action: AuthActionPlayback,
+					Path:   "cam",
+				},
 			},
 		},
-	}, conf.AuthInternalUsers)
+	}, conf.AuthInternalUsersComputed)
+	require.Equal(t, defaultAuthInternalUsers, conf.AuthInternalUsers)
 }
 
 func TestConfDeprecatedAuthWithEnvUser(t *testing.T) {
@@ -408,7 +408,7 @@ func TestConfDeprecatedAuthWithExplicitDefaults(t *testing.T) {
 			legacy)), nil, nil)
 	require.NoError(t, err)
 
-	require.Equal(t, ref.AuthInternalUsers, conf.AuthInternalUsers)
+	require.Equal(t, ref.AuthInternalUsersComputed, conf.AuthInternalUsersComputed)
 }
 
 func TestConfDeprecatedWebRTCICEServersIPv6(t *testing.T) {
@@ -423,7 +423,8 @@ func TestConfDeprecatedWebRTCICEServersIPv6(t *testing.T) {
 		URL:      "turn:[2001:db8::1]:3478?transport=tcp",
 		Username: "myuser",
 		Password: "mypass",
-	}}, conf.WebRTCICEServers2)
+	}}, conf.WebRTCICEServers2Computed)
+	require.Empty(t, conf.WebRTCICEServers2)
 }
 
 func TestConfErrors(t *testing.T) {
@@ -472,6 +473,14 @@ func TestConfErrors(t *testing.T) {
 			"invalid ICE server",
 			"webrtcICEServers: [testing]\n",
 			"invalid ICE server: 'testing'",
+		},
+		{
+			"legacy and modern ICE servers",
+			"webrtcICEServers:\n" +
+				"- stun:old.example.com:3478\n" +
+				"webrtcICEServers2:\n" +
+				"- url: stun:new.example.com:3478\n",
+			"'webrtcICEServers' cannot be used together with 'webrtcICEServers2'",
 		},
 		{
 			"non existent parameter in path",
@@ -1179,4 +1188,37 @@ func TestConfDefaultsAreNotShared(t *testing.T) {
 	require.Equal(t, "", conf2.AuthInternalUsers[0].Permissions[0].Path)
 	require.Equal(t, Credential("any"), defaultAuthInternalUsers[0].User)
 	require.Equal(t, "", defaultAuthInternalUsers[0].Permissions[0].Path)
+}
+
+func TestConfAddDeprecatedWebRTCICEServersTwice(t *testing.T) {
+	c1, _, err := Load(createTempFile(t, []byte("paths:\n  test:\n")), nil, nil)
+	require.NoError(t, err)
+
+	var patch OptionalGlobal
+	require.NoError(t, json.Unmarshal([]byte(`{"webrtcICEServers":["stun:stun.example.com:3478"]}`), &patch))
+
+	c2 := c1.Clone()
+	require.NoError(t, c2.PatchGlobal(&patch))
+	require.Equal(t, []WebRTCICEServer{{URL: "stun:stun.example.com:3478"}}, c2.WebRTCICEServers2Computed)
+
+	c3 := c2.Clone()
+	require.NoError(t, c3.PatchGlobal(&patch))
+	require.Equal(t, c2, c3)
+}
+
+func TestConfAddDeprecatedCredentialsTwice(t *testing.T) {
+	c1, _, err := Load(createTempFile(t, []byte("paths:\n  test:\n")), nil, nil)
+	require.NoError(t, err)
+
+	var patch OptionalPath
+	require.NoError(t, json.Unmarshal([]byte(`{"publishUser":"publisher","publishPass":"secret"}`), &patch))
+
+	c2 := c1.Clone()
+	require.NoError(t, c2.PatchPath("test", &patch))
+	require.Len(t, c2.AuthInternalUsersComputed, 3)
+	require.Equal(t, Credential("publisher"), c2.AuthInternalUsersComputed[1].User)
+
+	c3 := c2.Clone()
+	require.NoError(t, c3.PatchPath("test", &patch))
+	require.Equal(t, c2, c3)
 }

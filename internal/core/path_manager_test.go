@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
@@ -122,6 +123,41 @@ func TestPathManagerDynamicPathDescribeAndPublish(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestPathManagerAuthExpiration(t *testing.T) {
+	expiresAt := time.Now().Add(time.Hour)
+	pm := &pathManager{
+		authManager: &test.AuthManager{
+			AuthenticateImpl: func(_ *auth.Request) (*auth.Result, *auth.Error) {
+				return &auth.Result{User: "somebody", ExpiresAt: &expiresAt}, nil
+			},
+		},
+		pathConfs: map[string]*conf.Path{
+			"mypath": {Name: "mypath", Source: "publisher"},
+		},
+		parent: test.NilLogger,
+	}
+	pm.initialize()
+	defer pm.close()
+
+	confRes, err := pm.FindPathConf(defs.PathFindPathConfReq{
+		AccessRequest: defs.PathAccessRequest{Name: "mypath", Publish: true},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "somebody", confRes.AuthRes.User)
+	require.Equal(t, &expiresAt, confRes.AuthRes.ExpiresAt)
+
+	res, err := pm.AddPublisher(defs.PathAddPublisherReq{
+		Author: &dummyPublisher{},
+		Desc:   &description.Session{},
+		AccessRequest: defs.PathAccessRequest{
+			Name: "mypath", Publish: true,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "somebody", res.AuthRes.User)
+	require.Equal(t, &expiresAt, res.AuthRes.ExpiresAt)
+}
+
 func TestPathManagerConfigHotReload(t *testing.T) {
 	// Start MediaMTX with basic configuration
 	p, ok := newInstance(t, "api: yes\n"+
@@ -147,11 +183,9 @@ func TestPathManagerConfigHotReload(t *testing.T) {
 
 	// Send some data to establish the stream
 	err = source.WritePacketRTP(media0, &rtp.Packet{
-		Header: rtp.Header{
-			Version:     2,
-			PayloadType: 96,
-		},
-		Payload: []byte{5, 1, 2, 3, 4},
+		Version:     2,
+		PayloadType: 96,
+		Payload:     []byte{5, 1, 2, 3, 4},
 	})
 	require.NoError(t, err)
 
@@ -190,12 +224,10 @@ func TestPathManagerConfigHotReload(t *testing.T) {
 
 	// Verify the stream is still active and working
 	err = source.WritePacketRTP(media0, &rtp.Packet{
-		Header: rtp.Header{
-			Version:        2,
-			PayloadType:    96,
-			SequenceNumber: 2,
-		},
-		Payload: []byte{5, 1, 2, 3, 4},
+		Version:        2,
+		PayloadType:    96,
+		SequenceNumber: 2,
+		Payload:        []byte{5, 1, 2, 3, 4},
 	})
 	require.NoError(t, err)
 

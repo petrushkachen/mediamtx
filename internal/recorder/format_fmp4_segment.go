@@ -34,9 +34,7 @@ func writeInit(
 		Tracks: fmp4Tracks,
 		UserData: []amp4.IBox{
 			&recordstore.Mtxi{
-				FullBox: amp4.FullBox{
-					Version: 0,
-				},
+				Version:       0,
 				StreamID:      streamID,
 				SegmentNumber: segmentNumber,
 				DTS:           int64(dts),
@@ -168,7 +166,7 @@ func (s *formatFMP4Segment) close() error {
 
 func (s *formatFMP4Segment) closeCurPart() error {
 	if s.fi == nil {
-		s.path = recordstore.Path{Start: s.startNTP}.Encode(s.f.ri.pathFormat2)
+		s.path = recordstore.Path{Start: s.startNTP}.EncodeWithLocation(s.f.ri.pathFormat2, s.f.ri.location)
 		s.f.ri.Log(logger.Debug, "creating segment %s", s.path)
 
 		err := os.MkdirAll(filepath.Dir(s.path), 0o755)

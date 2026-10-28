@@ -115,15 +115,13 @@ func TestDest(t *testing.T) {
 		NTP: time.Now(),
 		PTS: 0,
 		RTPPackets: []*rtp.Packet{{
-			Header: rtp.Header{
-				Version:        2,
-				Marker:         true,
-				PayloadType:    96,
-				SequenceNumber: 123,
-				Timestamp:      456,
-				SSRC:           789,
-			},
-			Payload: []byte{5, 1},
+			Version:        2,
+			Marker:         true,
+			PayloadType:    96,
+			SequenceNumber: 123,
+			Timestamp:      456,
+			SSRC:           789,
+			Payload:        []byte{5, 1},
 		}},
 	})
 
@@ -150,6 +148,64 @@ func TestDest(t *testing.T) {
 		require.Error(t, runErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for RTSP destination to stop")
+	}
+}
+
+func TestDestServerDisconnect(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	handler := &testServerHandler{
+		announced: make(chan *gortsplib.ServerHandlerOnAnnounceCtx, 1),
+		received:  make(chan []byte, 1),
+	}
+	server := &gortsplib.Server{
+		RTSPAddress: "unused",
+		Handler:     handler,
+		Listen: func(string, string) (net.Listener, error) {
+			return ln, nil
+		},
+	}
+	require.NoError(t, server.Start())
+	defer server.Close()
+
+	desc := &description.Session{Medias: []*description.Media{{
+		Type:    description.MediaTypeVideo,
+		Formats: []format.Format{test.FormatH264},
+	}}}
+	strm := &stream.Stream{
+		OrigDesc:          desc,
+		WriteQueueSize:    512,
+		RTPMaxPayloadSize: 1450,
+		Parent:            test.NilLogger,
+	}
+	require.NoError(t, strm.Initialize())
+	defer strm.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dest := &rtsp.Dest{
+		Stream:       strm,
+		Dest:         "rtsp://" + ln.Addr().String() + "/stream",
+		ReadTimeout:  conf.Duration(10 * time.Second),
+		WriteTimeout: conf.Duration(10 * time.Second),
+		Parent:       test.NilLogger,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- dest.Run(ctx)
+	}()
+
+	strm.WaitForReaders()
+	server.Close()
+
+	select {
+	case runErr := <-done:
+		require.Error(t, runErr)
+		require.NotEqual(t, "terminated", runErr.Error())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for RTSP destination to detect server disconnect")
 	}
 }
 

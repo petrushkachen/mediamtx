@@ -34,7 +34,7 @@
 class MediaMTXMoQPublisher {
   static #RETRY_PAUSE = 2000;
 
-  static #MOQT_VERSION = "moqt-19";
+  static #MOQT_VERSION = "moqt-22";
 
   static #SETUP_TYPE = 0x2f00n;
   static #MSG_PUBLISH = 0x1dn;
@@ -286,7 +286,7 @@ class MediaMTXMoQPublisher {
     console.log("catalog:", catalog);
 
     await Promise.all([
-      this.#publish(0n, ".catalog", 0n),
+      this.#publish(0n, "catalog", 0n),
       this.#writeCatalog(catalogJSON, 0n),
     ]);
 

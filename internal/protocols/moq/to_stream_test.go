@@ -1,4 +1,4 @@
-package moq
+package moq_test
 
 import (
 	"testing"
@@ -8,6 +8,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bluenviron/mediamtx/internal/protocols/moq"
 	"github.com/bluenviron/mediamtx/internal/protocols/moq/catalog"
 )
 
@@ -21,10 +22,12 @@ func TestToStream(t *testing.T) {
 			{Codec: "avc3.640028"},
 			{Codec: "opus"},
 			{Codec: "mp4a.40.2", Samplerate: 44100, Channels: 2},
+			{Codec: "mp4a.40.2", Samplerate: 48000, Channels: 8},
+			{Codec: "mp4a.40.2", Samplerate: 48000, Channels: 7},
 		},
 	}
 
-	medias, _, err := ToStream(cat, nil)
+	medias, _, err := moq.ToStream(cat, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, []*description.Media{
@@ -66,5 +69,41 @@ func TestToStream(t *testing.T) {
 				IndexDeltaLength: 3,
 			}},
 		},
+		{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.MPEG4Audio{
+				PayloadTyp: 96,
+				Config: &mpeg4audio.AudioSpecificConfig{
+					Type:          mpeg4audio.ObjectTypeAACLC,
+					SampleRate:    48000,
+					ChannelConfig: 7,
+				},
+				SizeLength:       13,
+				IndexLength:      3,
+				IndexDeltaLength: 3,
+			}},
+		},
+		{
+			Type: description.MediaTypeAudio,
+			Formats: []format.Format{&format.MPEG4Audio{
+				PayloadTyp: 96,
+				Config: &mpeg4audio.AudioSpecificConfig{
+					Type:          mpeg4audio.ObjectTypeAACLC,
+					SampleRate:    48000,
+					ChannelConfig: 7,
+				},
+				SizeLength:       13,
+				IndexLength:      3,
+				IndexDeltaLength: 3,
+			}},
+		},
 	}, medias)
+
+	cat, _, err = moq.FromStream(&description.Session{Medias: medias[7:8]})
+	require.NoError(t, err)
+	require.Equal(t, 8, cat.Tracks[0].Channels)
+
+	medias, _, err = moq.ToStream(cat, nil)
+	require.NoError(t, err)
+	require.Equal(t, uint8(7), medias[0].Formats[0].(*format.MPEG4Audio).Config.ChannelConfig)
 }

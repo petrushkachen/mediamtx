@@ -1,4 +1,4 @@
-package hls
+package hls_test
 
 import (
 	"fmt"
@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bluenviron/mediamtx/internal/logger"
+	"github.com/bluenviron/mediamtx/internal/protocols/hls"
 	"github.com/bluenviron/mediamtx/internal/stream"
 	"github.com/bluenviron/mediamtx/internal/test"
 )
@@ -28,8 +29,8 @@ func TestFromStreamNoSupportedCodecs(t *testing.T) {
 
 	m := &gohlslib.Muxer{}
 
-	err := FromStream(desc, desc, r, m)
-	require.Equal(t, ErrNoSupportedCodecs, err)
+	err := hls.FromStream(desc, desc, r, m)
+	require.Equal(t, hls.ErrNoSupportedCodecs, err)
 }
 
 func TestFromStreamSkipUnsupportedTracks(t *testing.T) {
@@ -65,7 +66,7 @@ func TestFromStreamSkipUnsupportedTracks(t *testing.T) {
 		}),
 	}
 
-	err := FromStream(desc, desc, r, m)
+	err := hls.FromStream(desc, desc, r, m)
 	require.NoError(t, err)
 
 	require.Equal(t, 2, n)
@@ -86,8 +87,8 @@ func TestFromStreamKLVRequiresMPEGTSVariant(t *testing.T) {
 
 		m := &gohlslib.Muxer{Variant: gohlslib.MuxerVariantFMP4}
 
-		err := FromStream(desc, desc, r, m)
-		require.Equal(t, ErrNoSupportedCodecs, err)
+		err := hls.FromStream(desc, desc, r, m)
+		require.Equal(t, hls.ErrNoSupportedCodecs, err)
 	})
 
 	t.Run("klv alongside video, non-mpegts variant", func(t *testing.T) {
@@ -114,9 +115,129 @@ func TestFromStreamKLVRequiresMPEGTSVariant(t *testing.T) {
 
 		m := &gohlslib.Muxer{Variant: gohlslib.MuxerVariantFMP4}
 
-		err := FromStream(desc, desc, r, m)
+		err := hls.FromStream(desc, desc, r, m)
 		require.NoError(t, err)
 		require.Equal(t, 1, n)
 		require.Equal(t, 1, len(m.Tracks))
 	})
+}
+
+func TestFromStreamMPEGTSVariantSkipUnsupportedAudio(t *testing.T) {
+	for _, ca := range []struct {
+		name    string
+		variant gohlslib.MuxerVariant
+		tracks  int
+	}{
+		{"mpegts", gohlslib.MuxerVariantMPEGTS, 2},
+		{"fmp4", gohlslib.MuxerVariantFMP4, 3},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			desc := &description.Session{Medias: []*description.Media{
+				test.MediaH264,
+				{
+					Type:    description.MediaTypeAudio,
+					Formats: []format.Format{&format.Opus{PayloadTyp: 96, ChannelCount: 2}},
+				},
+				test.MediaMPEG4Audio,
+			}}
+
+			n := 0
+
+			r := &stream.Reader{
+				Parent: test.Logger(func(l logger.Level, f string, args ...any) {
+					require.Equal(t, logger.Warn, l)
+					require.Equal(t, "skipping track 2 (Opus)", fmt.Sprintf(f, args...))
+					n++
+				}),
+			}
+
+			m := &gohlslib.Muxer{Variant: ca.variant}
+
+			err := hls.FromStream(desc, desc, r, m)
+			require.NoError(t, err)
+			require.Equal(t, ca.tracks, len(m.Tracks))
+
+			if ca.variant == gohlslib.MuxerVariantMPEGTS {
+				require.Equal(t, 1, n)
+			} else {
+				require.Equal(t, 0, n)
+			}
+
+			err = m.Start()
+			require.NoError(t, err)
+			m.Close()
+		})
+	}
+}
+
+func TestFromStreamMPEGTSVariantNoSupportedAudio(t *testing.T) {
+	desc := &description.Session{Medias: []*description.Media{{
+		Type:    description.MediaTypeAudio,
+		Formats: []format.Format{&format.Opus{PayloadTyp: 96, ChannelCount: 2}},
+	}}}
+
+	r := &stream.Reader{
+		Parent: test.Logger(func(logger.Level, string, ...any) {
+			t.Error("should not happen")
+		}),
+	}
+
+	m := &gohlslib.Muxer{Variant: gohlslib.MuxerVariantMPEGTS}
+
+	err := hls.FromStream(desc, desc, r, m)
+	require.Equal(t, hls.ErrNoSupportedCodecs, err)
+}
+
+func TestFromStreamMPEGTSVariantSkipExtraAudio(t *testing.T) {
+	for _, ca := range []struct {
+		name    string
+		variant gohlslib.MuxerVariant
+		tracks  int
+	}{
+		{"mpegts", gohlslib.MuxerVariantMPEGTS, 2},
+		{"fmp4", gohlslib.MuxerVariantFMP4, 3},
+	} {
+		t.Run(ca.name, func(t *testing.T) {
+			desc := &description.Session{Medias: []*description.Media{
+				test.MediaH264,
+				test.MediaMPEG4Audio,
+				{
+					Type: description.MediaTypeAudio,
+					Formats: []format.Format{&format.MPEG4Audio{
+						PayloadTyp:       96,
+						Config:           test.FormatMPEG4Audio.Config,
+						SizeLength:       13,
+						IndexLength:      3,
+						IndexDeltaLength: 3,
+					}},
+				},
+			}}
+
+			n := 0
+
+			r := &stream.Reader{
+				Parent: test.Logger(func(l logger.Level, f string, args ...any) {
+					require.Equal(t, logger.Warn, l)
+					require.Equal(t, "skipping track 3 (MPEG-4 Audio)", fmt.Sprintf(f, args...))
+					n++
+				}),
+			}
+
+			m := &gohlslib.Muxer{Variant: ca.variant}
+
+			err := hls.FromStream(desc, desc, r, m)
+			require.NoError(t, err)
+			require.Equal(t, ca.tracks, len(m.Tracks))
+
+			if ca.variant == gohlslib.MuxerVariantMPEGTS {
+				require.Equal(t, 1, n)
+			} else {
+				require.Equal(t, 0, n)
+			}
+
+			err = m.Start()
+			require.NoError(t, err)
+			m.Close()
+		})
+	}
 }

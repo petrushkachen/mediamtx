@@ -93,6 +93,7 @@ func (s *httpServer) initialize() error {
 		ServerKey:         s.serverKey,
 		Handler:           router,
 		Parent:            s,
+		OnListenError:     s.parent.onListenError,
 	}
 	err := s.inner.Initialize()
 	if err != nil {
@@ -195,6 +196,9 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 	}
 
 	if contentTyp == index {
+		creds := &auth.Credentials{}
+		creds.FromHTTP(ctx.Request)
+
 		_, err := s.pathManager.FindPathConf(defs.PathFindPathConfReq{
 			Author: &logger.InlineWriter{
 				Parent: s,
@@ -205,7 +209,7 @@ func (s *httpServer) onRequest(ctx *gin.Context) {
 				Query:                ctx.Request.URL.RawQuery,
 				Publish:              false,
 				Proto:                auth.ProtocolHLS,
-				Credentials:          httpp.Credentials(ctx.Request),
+				Credentials:          creds,
 				IP:                   net.ParseIP(ctx.ClientIP()),
 				EnableAskCredentials: true,
 			},

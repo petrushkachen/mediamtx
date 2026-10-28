@@ -1,12 +1,14 @@
-package rtsp
+package rtsp_test
 
 import (
 	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
+	"github.com/bluenviron/mediamtx/internal/servers/rtsp"
 	"github.com/bluenviron/mediamtx/internal/stream"
 	"github.com/bluenviron/mediamtx/internal/test"
 	"github.com/bluenviron/mediamtx/internal/unit"
@@ -48,6 +51,61 @@ func (p *dummyPath) RemovePublisher(_ defs.PathRemovePublisherReq) {
 }
 
 func (p *dummyPath) RemoveReader(_ defs.PathRemoveReaderReq) {
+}
+
+func TestServerPublishExpiration(t *testing.T) {
+	expiresAt := time.Now().Add(time.Second)
+	pathManager := &test.PathManager{
+		FindPathConfImpl: func(_ defs.PathFindPathConfReq) (*defs.PathFindPathConfRes, error) {
+			return &defs.PathFindPathConfRes{
+				Conf:    &conf.Path{},
+				AuthRes: &auth.Result{User: "somebody", ExpiresAt: &expiresAt},
+			}, nil
+		},
+		AddPublisherImpl: func(req defs.PathAddPublisherReq) (*defs.PathAddPublisherRes, error) {
+			require.True(t, req.AccessRequest.SkipAuth)
+			strm := &stream.Stream{
+				OrigDesc:          req.Desc,
+				WriteQueueSize:    512,
+				RTPMaxPayloadSize: 1450,
+				Parent:            test.NilLogger,
+			}
+			require.NoError(t, strm.Initialize())
+			subStream := &stream.SubStream{Stream: strm, UseRTPPackets: true}
+			require.NoError(t, subStream.Initialize())
+			return &defs.PathAddPublisherRes{Path: &dummyPath{}, SubStream: subStream}, nil
+		},
+	}
+
+	s := &rtsp.Server{
+		Address:        "127.0.0.1:8557",
+		ReadTimeout:    conf.Duration(10 * time.Second),
+		WriteTimeout:   conf.Duration(10 * time.Second),
+		WriteQueueSize: 512,
+		Transports:     conf.RTSPTransports{gortsplib.ProtocolTCP: {}},
+		PathManager:    pathManager,
+		Parent:         test.NilLogger,
+	}
+	require.NoError(t, s.Initialize())
+	defer s.Close()
+
+	source := &gortsplib.Client{}
+	media := test.UniqueMediaH264()
+	require.NoError(t, source.StartRecording("rtsp://127.0.0.1:8557/teststream", &description.Session{
+		Medias: []*description.Media{media},
+	}))
+	defer source.Close()
+
+	list, err := s.APISessionsList()
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.Equal(t, "somebody", list.Items[0].User)
+	require.Equal(t, &expiresAt, list.Items[0].ExpiresAt)
+
+	require.Eventually(t, func() bool {
+		list, err = s.APISessionsList()
+		return err == nil && len(list.Items) == 0
+	}, 3*time.Second, 20*time.Millisecond)
 }
 
 func TestServerPublish(t *testing.T) {
@@ -100,7 +158,10 @@ func TestServerPublish(t *testing.T) {
 								require.True(t, ok)
 							}
 
-							return &defs.PathFindPathConfRes{Conf: &conf.Path{}, User: req.AccessRequest.Credentials.User}, nil
+							return &defs.PathFindPathConfRes{
+								Conf:    &conf.Path{},
+								AuthRes: &auth.Result{User: req.AccessRequest.Credentials.User},
+							}, nil
 						},
 						AddPublisherImpl: func(req defs.PathAddPublisherReq) (*defs.PathAddPublisherRes, error) {
 							require.Equal(t, "teststream", req.AccessRequest.Name)
@@ -154,7 +215,7 @@ func TestServerPublish(t *testing.T) {
 						authMethods = []rtspauth.VerifyMethod{rtspauth.VerifyMethodBasic, rtspauth.VerifyMethodDigestMD5}
 					}
 
-					s := &Server{
+					s := &rtsp.Server{
 						Address:        "127.0.0.1:8557",
 						AuthMethods:    authMethods,
 						ReadTimeout:    conf.Duration(10 * time.Second),
@@ -215,15 +276,13 @@ func TestServerPublish(t *testing.T) {
 					defer source.Close()
 
 					err = source.WritePacketRTP(media0, &rtp.Packet{
-						Header: rtp.Header{
-							Version:        2,
-							Marker:         true,
-							PayloadType:    96,
-							SequenceNumber: 123,
-							Timestamp:      45343,
-							SSRC:           563423,
-						},
-						Payload: []byte{5, 2, 3, 4},
+						Version:        2,
+						Marker:         true,
+						PayloadType:    96,
+						SequenceNumber: 123,
+						Timestamp:      45343,
+						SSRC:           563423,
+						Payload:        []byte{5, 2, 3, 4},
 					})
 					require.NoError(t, err)
 
@@ -286,7 +345,7 @@ func TestServerPublishMPEGTS(t *testing.T) {
 		FindPathConfImpl: func(req defs.PathFindPathConfReq) (*defs.PathFindPathConfRes, error) {
 			require.Equal(t, "teststream", req.AccessRequest.Name)
 			require.Equal(t, "param=value", req.AccessRequest.Query)
-			return &defs.PathFindPathConfRes{Conf: pathConf}, nil
+			return &defs.PathFindPathConfRes{Conf: pathConf, AuthRes: &auth.Result{}}, nil
 		},
 		AddPublisherImpl: func(req defs.PathAddPublisherReq) (*defs.PathAddPublisherRes, error) {
 			require.Equal(t, "teststream", req.AccessRequest.Name)
@@ -344,7 +403,7 @@ func TestServerPublishMPEGTS(t *testing.T) {
 		},
 	}
 
-	s := &Server{
+	s := &rtsp.Server{
 		Address:        "127.0.0.1:8557",
 		ReadTimeout:    conf.Duration(10 * time.Second),
 		WriteTimeout:   conf.Duration(10 * time.Second),
@@ -481,7 +540,11 @@ func TestServerRead(t *testing.T) {
 						require.True(t, ok)
 					}
 
-					return &defs.PathAddReaderRes{Path: &dummyPath{}, User: req.AccessRequest.Credentials.User, Stream: strm}, nil
+					return &defs.PathAddReaderRes{
+						Path:    &dummyPath{},
+						AuthRes: &auth.Result{User: req.AccessRequest.Credentials.User},
+						Stream:  strm,
+					}, nil
 				},
 			}
 
@@ -495,7 +558,7 @@ func TestServerRead(t *testing.T) {
 				authMethods = []rtspauth.VerifyMethod{rtspauth.VerifyMethodBasic, rtspauth.VerifyMethodDigestMD5}
 			}
 
-			s := &Server{
+			s := &rtsp.Server{
 				Address:        "127.0.0.1:8557",
 				AuthMethods:    authMethods,
 				ReadTimeout:    conf.Duration(10 * time.Second),
@@ -531,14 +594,12 @@ func TestServerRead(t *testing.T) {
 
 			reader.OnPacketRTPAny(func(_ *description.Media, _ format.Format, p *rtp.Packet) {
 				require.Equal(t, &rtp.Packet{
-					Header: rtp.Header{
-						Version:        2,
-						Marker:         true,
-						PayloadType:    96,
-						SequenceNumber: p.SequenceNumber,
-						Timestamp:      p.Timestamp,
-						SSRC:           p.SSRC,
-					},
+					Version:        2,
+					Marker:         true,
+					PayloadType:    96,
+					SequenceNumber: p.SequenceNumber,
+					Timestamp:      p.Timestamp,
+					SSRC:           p.SSRC,
 					Payload: []byte{
 						0x18, 0x00, 0x19, 0x67, 0x42, 0xc0, 0x28, 0xd9,
 						0x00, 0x78, 0x02, 0x27, 0xe5, 0x84, 0x00, 0x00,
@@ -645,7 +706,7 @@ func TestServerRedirect(t *testing.T) {
 				},
 			}
 
-			s := &Server{
+			s := &rtsp.Server{
 				Address:        "127.0.0.1:8557",
 				AuthMethods:    []rtspauth.VerifyMethod{rtspauth.VerifyMethodBasic},
 				ReadTimeout:    conf.Duration(10 * time.Second),
@@ -690,7 +751,7 @@ func TestAuthError(t *testing.T) {
 		},
 	}
 
-	s := &Server{
+	s := &rtsp.Server{
 		Address:        "127.0.0.1:8557",
 		ReadTimeout:    conf.Duration(10 * time.Second),
 		WriteTimeout:   conf.Duration(10 * time.Second),
@@ -716,4 +777,82 @@ func TestAuthError(t *testing.T) {
 
 	_, _, err = reader.Describe(u)
 	require.EqualError(t, err, "bad status code: 401 (Unauthorized)")
+}
+
+func TestServerAPISessionsKickConcurrent(t *testing.T) {
+	pathManager := &test.PathManager{
+		FindPathConfImpl: func(defs.PathFindPathConfReq) (*defs.PathFindPathConfRes, error) {
+			return &defs.PathFindPathConfRes{Conf: &conf.Path{}, AuthRes: &auth.Result{}}, nil
+		},
+	}
+
+	s := &rtsp.Server{
+		Address:        "127.0.0.1:8557",
+		ReadTimeout:    conf.Duration(10 * time.Second),
+		WriteTimeout:   conf.Duration(10 * time.Second),
+		WriteQueueSize: 512,
+		PathManager:    pathManager,
+		Parent:         test.NilLogger,
+	}
+	err := s.Initialize()
+	require.NoError(t, err)
+	defer s.Close()
+
+	for range 20 {
+		var u *base.URL
+		u, err = base.ParseURL("rtsp://127.0.0.1:8557/teststream")
+		require.NoError(t, err)
+		source := &gortsplib.Client{Scheme: u.Scheme, Host: u.Host}
+		err = source.Start()
+		require.NoError(t, err)
+
+		_, err = source.Announce(u, &description.Session{Medias: []*description.Media{test.MediaH264}})
+		require.NoError(t, err)
+
+		var list *defs.APIRTSPSessionList
+		list, err = s.APISessionsList()
+		require.NoError(t, err)
+		require.Len(t, list.Items, 1)
+		id := list.Items[0].ID
+
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		kickResults := make(chan error, 2)
+		for range 10 {
+			wg.Go(func() {
+				<-start
+				_, _ = s.APISessionsList()
+				_, _ = s.APISessionsGet(id)
+			})
+		}
+		for range 2 {
+			wg.Go(func() {
+				<-start
+				kickResults <- s.APISessionsKick(id)
+			})
+		}
+		close(start)
+		wg.Wait()
+		close(kickResults)
+
+		kicked, notFound := 0, 0
+		for err := range kickResults {
+			switch {
+			case err == nil:
+				kicked++
+			case errors.Is(err, rtsp.ErrSessionNotFound):
+				notFound++
+			default:
+				require.NoError(t, err)
+			}
+		}
+		require.Equal(t, 1, kicked)
+		require.Equal(t, 1, notFound)
+
+		list, err = s.APISessionsList()
+		require.NoError(t, err)
+		require.Empty(t, list.Items)
+		require.ErrorIs(t, s.APISessionsKick(id), rtsp.ErrSessionNotFound)
+		source.Close()
+	}
 }

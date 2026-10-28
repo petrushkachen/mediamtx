@@ -1,4 +1,4 @@
-package moq
+package moq_test
 
 import (
 	"encoding/base64"
@@ -11,6 +11,7 @@ import (
 	"github.com/bluenviron/mediacommon/v2/pkg/codecs/mpeg4audio"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bluenviron/mediamtx/internal/protocols/moq"
 	"github.com/bluenviron/mediamtx/internal/protocols/moq/catalog"
 )
 
@@ -28,6 +29,14 @@ func TestFromStream(t *testing.T) {
 		ChannelConfig: 2,
 	}
 	mpeg4Enc, err := mpeg4Config.Marshal()
+	require.NoError(t, err)
+
+	mpeg4Config71 := &mpeg4audio.AudioSpecificConfig{
+		Type:          2,
+		SampleRate:    48000,
+		ChannelConfig: 7,
+	}
+	mpeg4Enc71, err := mpeg4Config71.Marshal()
 	require.NoError(t, err)
 
 	desc := &description.Session{
@@ -58,10 +67,16 @@ func TestFromStream(t *testing.T) {
 				SampleRate:   44100,
 				ChannelCount: 2,
 			}}},
+			{Formats: []format.Format{&format.MPEG4Audio{
+				Config:           mpeg4Config71,
+				SizeLength:       13,
+				IndexLength:      3,
+				IndexDeltaLength: 3,
+			}}},
 		},
 	}
 
-	cat, _, err := FromStream(desc)
+	cat, _, err := moq.FromStream(desc)
 	require.NoError(t, err)
 
 	require.Equal(t, &catalog.Catalog{
@@ -138,6 +153,15 @@ func TestFromStream(t *testing.T) {
 				Codec:      "pcm-s16",
 				Samplerate: 44100,
 				Channels:   2,
+			},
+			{
+				Name:       "10",
+				Packaging:  "loc",
+				IsLive:     true,
+				Codec:      "mp4a.40.2",
+				Samplerate: 48000,
+				Channels:   8,
+				InitData:   base64.StdEncoding.EncodeToString(mpeg4Enc71),
 			},
 		},
 	}, cat)

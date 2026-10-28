@@ -73,6 +73,13 @@ func TestFromStream(t *testing.T) {
 		0x44, 0x01, 0xc0, 0x73, 0xc1, 0x89,
 	}
 
+	h264RecoveryPointSPS := []byte{
+		0x67, 0x64, 0x00, 0x28, 0xac, 0xd9, 0x40, 0x78,
+		0x02, 0x27, 0xe5, 0x84, 0x00, 0x00, 0x03, 0x00,
+		0x04, 0x00, 0x00, 0x03, 0x00, 0xf0, 0x3c, 0x60,
+		0xc6, 0x58,
+	}
+
 	cases := []struct {
 		name           string
 		medias         []*description.Media
@@ -110,6 +117,42 @@ func TestFromStream(t *testing.T) {
 					PTS: 90000 * 5,
 					Payload: unit.PayloadMPEG4Audio{
 						{3, 4},
+					},
+				})
+			},
+		},
+		{
+			name: "h264 recovery point",
+			medias: []*description.Media{
+				{
+					Formats: []format.Format{&format.H264{
+						PayloadTyp:        96,
+						PacketizationMode: 1,
+						SPS:               h264RecoveryPointSPS,
+						PPS:               h264DefaultPPS,
+					}},
+				},
+			},
+			expectedTracks: []*gortmplib.Track{
+				{Codec: &codecs.H264{
+					SPS: h264RecoveryPointSPS,
+					PPS: h264DefaultPPS,
+				}},
+			},
+			writeUnits: func(medias []*description.Media, subStream *stream.SubStream) {
+				// the stream has no IDR, random access is signaled by a recovery point SEI
+				subStream.WriteUnit(medias[0], medias[0].Formats[0], &unit.Unit{
+					PTS: 0,
+					Payload: unit.PayloadH264{
+						{0x06, 0x06, 0x01, 0xc4, 0x80},
+						{0x41, 0xe0, 0x04},
+					},
+				})
+
+				subStream.WriteUnit(medias[0], medias[0].Formats[0], &unit.Unit{
+					PTS: 90000 * 5,
+					Payload: unit.PayloadH264{
+						{0x41, 0x9a, 0x21, 0x6c, 0x45, 0xff},
 					},
 				})
 			},
@@ -674,7 +717,7 @@ func TestFromStream(t *testing.T) {
 
 			r := &stream.Reader{Parent: test.NilLogger}
 
-			err = FromStream(strm.OrigDesc, strm.OutDescCopy(), r, conn, nconn, 10*time.Second, conn.FourCcList)
+			_, err = FromStream(strm.OrigDesc, strm.OutDescCopy(), r, conn, nconn, 10*time.Second, conn.FourCcList)
 			require.NoError(t, err)
 
 			strm.AddReader(r)
@@ -820,7 +863,7 @@ func TestFromStreamLegacyClientMultipleTracks(t *testing.T) {
 
 	r := &stream.Reader{Parent: test.NilLogger}
 
-	err = FromStream(strm.OrigDesc, strm.OutDescCopy(), r, conn, nconn, 10*time.Second, conn.FourCcList)
+	_, err = FromStream(strm.OrigDesc, strm.OutDescCopy(), r, conn, nconn, 10*time.Second, conn.FourCcList)
 	require.NoError(t, err)
 
 	strm.AddReader(r)
@@ -858,7 +901,7 @@ func TestFromStreamNoSupportedCodecs(t *testing.T) {
 
 	conn := &gortmplib.ServerConn{}
 
-	err := FromStream(desc, desc, r, conn, nil, 0, nil)
+	_, err := FromStream(desc, desc, r, conn, nil, 0, nil)
 	require.Equal(t, errNoSupportedCodecsFrom, err)
 }
 
@@ -914,7 +957,7 @@ func TestFromStreamSkipUnsupportedTracks(t *testing.T) {
 	err = conn.AcceptConn()
 	require.NoError(t, err)
 
-	err = FromStream(desc, desc, r, conn, nil, 0, nil)
+	_, err = FromStream(desc, desc, r, conn, nil, 0, nil)
 	require.NoError(t, err)
 
 	require.Equal(t, 1, n)

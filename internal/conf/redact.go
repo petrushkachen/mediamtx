@@ -1,8 +1,6 @@
 package conf
 
-const (
-	redactedCredential = "<redacted>"
-)
+const redactedCredential = "<redacted>"
 
 // Redact clones a configuration and redacts credentials from it.
 func Redact(c *Conf) *Conf {

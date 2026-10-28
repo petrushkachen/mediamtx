@@ -189,15 +189,13 @@ func TestStreamResizeOversizedRTPPackets(t *testing.T) {
 		PTS: 90000,
 		RTPPackets: []*rtp.Packet{
 			{
-				Header: rtp.Header{
-					Version:        2,
-					Marker:         true,
-					PayloadType:    96,
-					SequenceNumber: 122,
-					Timestamp:      45343,
-					SSRC:           563423,
-				},
-				Payload: []byte{1, 2, 3, 4},
+				Version:        2,
+				Marker:         true,
+				PayloadType:    96,
+				SequenceNumber: 122,
+				Timestamp:      45343,
+				SSRC:           563423,
+				Payload:        []byte{1, 2, 3, 4},
 			},
 		},
 	})
@@ -211,15 +209,13 @@ func TestStreamResizeOversizedRTPPackets(t *testing.T) {
 		PTS: 90000,
 		RTPPackets: []*rtp.Packet{
 			{
-				Header: rtp.Header{
-					Version:        2,
-					Marker:         true,
-					PayloadType:    96,
-					SequenceNumber: 123,
-					Timestamp:      45343,
-					SSRC:           563423,
-				},
-				Payload: oversizedPayload,
+				Version:        2,
+				Marker:         true,
+				PayloadType:    96,
+				SequenceNumber: 123,
+				Timestamp:      45343,
+				SSRC:           563423,
+				Payload:        oversizedPayload,
 			},
 		},
 	})
@@ -312,6 +308,29 @@ func TestStreamAlwaysAvailableErrors(t *testing.T) {
 			},
 			"MPEG-4 audio configuration does not match, is type=2, sampleRate=48000, " +
 				"channelCount=1, but stream expects type=2, sampleRate=44100, channelCount=2",
+		},
+		{
+			"wrong mpeg-4 audio config with 8 channels",
+			[]conf.AlwaysAvailableTrack{
+				{Codec: "MPEG4Audio", SampleRate: 48000, ChannelCount: 8},
+			},
+			&description.Session{
+				Medias: []*description.Media{
+					{
+						Type: description.MediaTypeAudio,
+						Formats: []format.Format{&format.MPEG4Audio{
+							Config: &mpeg4audio.AudioSpecificConfig{
+								Type:          2,
+								SampleRate:    44100,
+								ChannelConfig: 7,
+								ChannelCount:  8, //nolint:staticcheck
+							},
+						}},
+					},
+				},
+			},
+			"MPEG-4 audio configuration does not match, is type=2, sampleRate=44100, " +
+				"channelCount=7, but stream expects type=2, sampleRate=48000, channelCount=7",
 		},
 		{
 			"wrong g711 config",

@@ -18,6 +18,8 @@ import (
 // recordedFiles returns the number and total size of the files recorded for a path.
 // A missing directory means that nothing has been recorded yet.
 func recordedFiles(t *testing.T, dir string) (int, int64) {
+	t.Helper()
+
 	files, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
 		return 0, 0
@@ -35,6 +37,8 @@ func recordedFiles(t *testing.T, dir string) (int, int64) {
 // publishH264 starts a RTSP publisher on the given path and returns the client
 // and a function that writes one H264 packet, advancing the timestamp by tsStep.
 func publishH264(t *testing.T, path string, tsStep uint32) (*gortsplib.Client, func() error) {
+	t.Helper()
+
 	medi := test.UniqueMediaH264()
 
 	c := &gortsplib.Client{}
@@ -48,15 +52,13 @@ func publishH264(t *testing.T, path string, tsStep uint32) (*gortsplib.Client, f
 	ts := uint32(45343)
 	write := func() error {
 		err2 := c.WritePacketRTP(medi, &rtp.Packet{
-			Header: rtp.Header{
-				Version:        2,
-				Marker:         true,
-				PayloadType:    96,
-				SequenceNumber: seq,
-				Timestamp:      ts,
-				SSRC:           563423,
-			},
-			Payload: []byte{5},
+			Version:        2,
+			Marker:         true,
+			PayloadType:    96,
+			SequenceNumber: seq,
+			Timestamp:      ts,
+			SSRC:           563423,
+			Payload:        []byte{5},
 		})
 		seq++
 		ts += tsStep

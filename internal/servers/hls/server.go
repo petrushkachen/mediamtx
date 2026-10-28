@@ -2,6 +2,7 @@
 package hls
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/externalcmd"
@@ -58,6 +60,7 @@ type serverPathManager interface {
 
 type serverParent interface {
 	logger.Writer
+	OnFatalError(context.Context, error)
 }
 
 // Server is a HLS server.
@@ -194,6 +197,11 @@ func (s *Server) Close() {
 	s.wg.Wait()
 
 	s.Log(logger.Debug, "closed")
+}
+
+func (s *Server) onListenError(ctx context.Context, err error) {
+	s.Log(logger.Error, "%s", err)
+	s.Parent.OnFatalError(ctx, err)
 }
 
 func (s *Server) createAutomaticMuxerLocked(pa defs.Path) {
@@ -471,13 +479,16 @@ func (s *Server) createNonCDNSession(dir string, ctx *gin.Context) *session {
 		return nil
 	}
 
+	creds := &auth.Credentials{}
+	creds.FromHTTP(ctx.Request)
+
 	sx := &session{
 		wg:              &s.wg,
 		remoteAddr:      httpp.RemoteAddr(ctx),
 		pathName:        dir,
 		query:           ctx.Request.URL.RawQuery,
 		userAgent:       ctx.Request.UserAgent(),
-		credentials:     httpp.Credentials(ctx.Request),
+		credentials:     creds,
 		externalCmdPool: s.ExternalCmdPool,
 		pathManager:     s.PathManager,
 		server:          s,
